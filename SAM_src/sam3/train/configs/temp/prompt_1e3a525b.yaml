@@ -1,0 +1,407 @@
+# @package _global_
+defaults:
+- _self_
+paths:
+  data_root: /data/zhaishaoqing/project/sam3-M2C/data/1e3a525b/workspace
+  experiment_log_dir: /data/zhaishaoqing/project/sam3-M2C/data/1e3a525b/workspace
+  bpe_path: /data/zhaishaoqing/project/sam3-M2C/SAM_src/assets/bpe_simple_vocab_16e6.txt.gz
+data_train:
+  supercategory_tuple: ${all_supercategories.0}
+  num_images: null
+  train_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterCrowds
+    - _target_: sam3.train.transforms.filter_query_transforms.RemoveInputBoxes
+    - _target_: sam3.train.transforms.segmentation.DecodeRle
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes:
+        _target_: sam3.train.transforms.basic.get_random_resize_scales
+        size: ${scratch.resolution}
+        min_size: 480
+        rounded: false
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: ${scratch.resolution}
+      square: true
+      consistent_transform: ${scratch.consistent_transform}
+    - _target_: sam3.train.transforms.basic_for_api.PadToSizeAPI
+      size: ${scratch.resolution}
+      consistent_transform: ${scratch.consistent_transform}
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean: ${scratch.train_norm_mean}
+      std: ${scratch.train_norm_std}
+    - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+      query_filter:
+        _target_: sam3.train.transforms.filter_query_transforms.FilterEmptyTargets
+  - _target_: sam3.train.transforms.filter_query_transforms.FlexibleFilterFindGetQueries
+    query_filter:
+      _target_: sam3.train.transforms.filter_query_transforms.FilterFindQueriesWithTooManyOut
+      max_num_objects: ${scratch.max_ann_per_img}
+  val_transforms:
+  - _target_: sam3.train.transforms.basic_for_api.ComposeAPI
+    transforms:
+    - _target_: sam3.train.transforms.basic_for_api.RandomResizeAPI
+      sizes: ${scratch.resolution}
+      max_size:
+        _target_: sam3.train.transforms.basic.get_random_resize_max_size
+        size: ${scratch.resolution}
+      square: true
+      consistent_transform: false
+    - _target_: sam3.train.transforms.basic_for_api.ToTensorAPI
+    - _target_: sam3.train.transforms.basic_for_api.NormalizeAPI
+      mean: ${scratch.val_norm_mean}
+      std: ${scratch.val_norm_std}
+  loss:
+    _target_: sam3.train.loss.sam3_loss.Sam3LossWrapper
+    matcher: ${scratch.matcher}
+    o2m_weight: 2.0
+    o2m_matcher:
+      _target_: sam3.train.matcher.BinaryOneToManyMatcher
+      alpha: 0.3
+      threshold: 0.4
+      topk: 4
+    use_o2m_matcher_on_o2m_aux: false
+    loss_fns_find:
+    - _target_: sam3.train.loss.loss_fns.Boxes
+      weight_dict:
+        loss_bbox: 5.0
+        loss_giou: 2.0
+    - _target_: sam3.train.loss.loss_fns.IABCEMdetr
+      weak_loss: false
+      weight_dict:
+        loss_ce: 20.0
+        presence_loss: 20.0
+      pos_weight: 10.0
+      alpha: 0.25
+      gamma: 2
+      use_presence: true
+      pos_focal: false
+      pad_n_queries: 200
+      pad_scale_pos: 1.0
+    - _target_: sam3.train.loss.loss_fns.Masks
+      focal_alpha: 0.25
+      focal_gamma: 2.0
+      weight_dict:
+        loss_mask: 200.0
+        loss_dice: 10.0
+      compute_aux: false
+    loss_fn_semantic_seg:
+      _target_: sam3.train.loss.loss_fns.SemanticSegCriterion
+      presence_head: true
+      presence_loss: false
+      focal: true
+      focal_alpha: 0.6
+      focal_gamma: 2.0
+      downsample: false
+      weight_dict:
+        loss_semantic_seg: 20.0
+        loss_semantic_presence: 1.0
+        loss_semantic_dice: 30.0
+    scale_by_find_batch_size: ${scratch.scale_by_find_batch_size}
+scratch:
+  enable_segmentation: true
+  use_act_checkpoint_geo_encoder: true
+  input_geometry_encoder:
+    _target_: sam3.model.geometry_encoders.SequenceGeometryEncoder
+    pos_enc: ${scratch.pos_embed}
+    encode_boxes_as_points: false
+    points_direct_project: true
+    points_pool: true
+    points_pos_enc: true
+    boxes_direct_project: true
+    boxes_pool: true
+    boxes_pos_enc: true
+    d_model: ${scratch.d_model}
+    num_layers: 3
+    use_act_ckpt: ${scratch.use_act_checkpoint_geo_encoder}
+    layer:
+      _target_: sam3.model.encoder.TransformerEncoderLayer
+      activation: relu
+      d_model: ${scratch.d_model}
+      dim_feedforward: 2048
+      dropout: ${scratch.encoder_dropout}
+      pos_enc_at_attn: false
+      pre_norm: true
+      pos_enc_at_cross_attn_queries: false
+      pos_enc_at_cross_attn_keys: true
+      self_attention:
+        _target_: sam3.model.attention.MultiheadAttention
+        attn_type: Vanilla
+        num_heads: 8
+        dropout: ${scratch.encoder_dropout}
+        embed_dim: ${scratch.d_model}
+        batch_first: false
+      cross_attention:
+        _target_: sam3.model.attention.MultiheadAttention
+        attn_type: Vanilla
+        num_heads: 8
+        dropout: ${scratch.encoder_dropout}
+        embed_dim: ${scratch.d_model}
+        batch_first: false
+    add_cls: true
+    add_post_encode_proj: true
+  boxRPB: log
+  dac: true
+  use_early_fusion: true
+  o2m_mask: false
+  num_feature_levels: 1
+  encoder_dropout: 0.0
+  decoder_dropout: 0.0
+  tokenizer_ve:
+    _target_: sam3.model.tokenizer_ve.SimpleTokenizer
+    bpe_path: ${paths.bpe_path}
+  freeze_text_tower: true
+  freeze_image_tower: true
+  vis_backbone_dp: 0.0
+  use_act_checkpoint_vision_backbone: true
+  use_act_checkpoint_text_backbone: true
+  use_act_checkpoint_encoder: true
+  use_act_checkpoint_decoder: true
+  loss: null
+  num_queries: 200
+  presence_weight: 20.0
+  loss_ce_weight: 20.0
+  iabce_pos_weight: 5.0
+  iabce_pos_focal: false
+  iabce_alpha: 0.25
+  instance_query_loss_pad_scale_pos: 1.0
+  use_o2m_matcher_on_o2m_aux: false
+  use_instance_query: true
+  d_model: 256
+  pos_embed:
+    _target_: sam3.model.position_encoding.PositionEmbeddingSine
+    num_pos_feats: ${scratch.d_model}
+    normalize: true
+    scale: null
+    temperature: 10000
+  use_presence_eval: true
+  original_box_postprocessor:
+    _target_: sam3.eval.postprocessors.PostProcessImage
+    max_dets_per_img: -1
+    use_original_ids: true
+    use_original_sizes_box: true
+    use_presence: ${scratch.use_presence_eval}
+  matcher:
+    _target_: sam3.train.matcher.BinaryHungarianMatcherV2
+    focal: true
+    cost_class: 2.0
+    cost_bbox: 5.0
+    cost_giou: 2.0
+    alpha: 0.25
+    gamma: 2
+    stable: false
+  scale_by_find_batch_size: true
+  resolution: 1008
+  consistent_transform: false
+  max_ann_per_img: 200
+  train_norm_mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  train_norm_std:
+  - 0.5
+  - 0.5
+  - 0.5
+  val_norm_mean:
+  - 0.5
+  - 0.5
+  - 0.5
+  val_norm_std:
+  - 0.5
+  - 0.5
+  - 0.5
+  train_batch_size: 5
+  val_batch_size: 1
+  num_train_workers: 0
+  num_val_workers: 0
+  max_data_epochs: 50
+  target_epoch_size: 1500
+  hybrid_repeats: 1
+  context_length: 32
+  gather_pred_via_filesys: false
+  lr_phi: 0.0005
+  lr_scale: 0
+  lr_transformer: 0
+  lr_vision_backbone: 0
+  lr_language_backbone: 0
+  lrd_vision_backbone: 0.9
+  wd: 0.0
+  scheduler_timescale: 5
+  scheduler_warmup: 5
+  scheduler_cooldown: 5
+trainer:
+  _target_: sam3.train.trainer.Trainer
+  skip_saving_ckpts: true
+  empty_gpu_mem_cache_after_eval: true
+  skip_first_val: true
+  max_epochs: ${scratch.max_data_epochs}
+  accelerator: cuda
+  seed_value: 123
+  val_epoch_freq: 1000
+  mode: train
+  distributed:
+    backend: nccl
+    find_unused_parameters: false
+    gradient_as_bucket_view: true
+  loss:
+    all: ${data_train.loss}
+    default:
+      _target_: sam3.train.loss.sam3_loss.DummyLoss
+  data:
+    train:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.sam3_image_dataset.Sam3ImageDataset
+        limit_ids: ${data_train.num_images}
+        transforms: ${data_train.train_transforms}
+        load_segmentation: ${scratch.enable_segmentation}
+        max_ann_per_img: 500000
+        multiplier: 1
+        max_train_queries: 50000
+        max_val_queries: 50000
+        training: true
+        use_caching: false
+        img_folder: ${paths.data_root}/${data_train.supercategory_tuple.train.img_folder}
+        ann_file:
+          _target_: sam3.eval.coco_reindex.reindex_coco_to_temp
+          input_json_path: ${paths.data_root}/${data_train.supercategory_tuple.train.json}
+        coco_json_loader:
+          _target_: sam3.train.data.coco_json_loaders.COCO_FROM_JSON
+          prompts: ${data_prompts.${data_train.supercategory_tuple.name}}
+          _partial_: true
+      shuffle: true
+      batch_size: ${scratch.train_batch_size}
+      num_workers: ${scratch.num_train_workers}
+      pin_memory: false
+      drop_last: true
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: ${scratch.hybrid_repeats}
+        dict_key: all
+        with_seg_masks: ${scratch.enable_segmentation}
+    val:
+      _target_: sam3.train.data.torch_dataset.TorchDataset
+      dataset:
+        _target_: sam3.train.data.sam3_image_dataset.Sam3ImageDataset
+        load_segmentation: ${scratch.enable_segmentation}
+        coco_json_loader:
+          _target_: sam3.train.data.coco_json_loaders.COCO_FROM_JSON
+          prompts: ${data_prompts.${data_train.supercategory_tuple.name}}
+          include_negatives: true
+          category_chunk_size: 20
+          _partial_: true
+        img_folder: ${paths.data_root}/${data_train.supercategory_tuple.val.img_folder}
+        ann_file:
+          _target_: sam3.eval.coco_reindex.reindex_coco_to_temp
+          input_json_path: ${paths.data_root}/${data_train.supercategory_tuple.val.json}
+        transforms: ${data_train.val_transforms}
+        max_ann_per_img: 100000
+        multiplier: 1
+        training: false
+      shuffle: false
+      batch_size: ${scratch.val_batch_size}
+      num_workers: ${scratch.num_val_workers}
+      pin_memory: false
+      drop_last: false
+      collate_fn:
+        _target_: sam3.train.data.collator.collate_fn_api
+        _partial_: true
+        repeats: 1
+        dict_key: odinw35
+        with_seg_masks: ${scratch.enable_segmentation}
+  model:
+    _target_: sam3.model_builder.build_sam3_image_model
+    bpe_path: ${paths.bpe_path}
+    device: cuda
+    eval_mode: false
+    enable_segmentation: ${scratch.enable_segmentation}
+    prompt_tuning_init_text: A polyp in a colonoscopy image
+  meters:
+    val:
+      odinw35:
+        detection:
+          _target_: sam3.eval.coco_writer.PredictionDumper
+          iou_type: bbox
+          dump_dir: ${launcher.experiment_log_dir}/dumps/odinw/${data_train.supercategory_tuple.name}
+          merge_predictions: true
+          postprocessor: ${scratch.original_box_postprocessor}
+          gather_pred_via_filesys: ${scratch.gather_pred_via_filesys}
+          maxdets: 100
+          pred_file_evaluators: []
+  optim:
+    amp:
+      enabled: true
+      amp_dtype: bfloat16
+    optimizer:
+      _target_: torch.optim.AdamW
+    gradient_clip:
+      _target_: sam3.train.optim.optimizer.GradientClipper
+      max_norm: 1.0
+      norm_type: 2
+    param_group_modifiers: []
+    options:
+      lr:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.CosineParamScheduler
+          start_value: ${scratch.lr_phi}
+          end_value: 5e-6
+        param_names:
+        - '*pt_phi*'
+      weight_decay:
+      - scheduler:
+          _target_: fvcore.common.param_scheduler.ConstantParamScheduler
+          value: ${scratch.wd}
+  checkpoint:
+    save_dir: ${launcher.experiment_log_dir}/checkpoints
+    save_freq: 0
+  logging:
+    tensorboard_writer:
+      _target_: sam3.train.utils.logger.make_tensorboard_logger
+      log_dir: ${launcher.experiment_log_dir}/tensorboard
+      flush_secs: 120
+      should_log: true
+    wandb_writer: null
+    log_dir: ${launcher.experiment_log_dir}/logs/${data_train.supercategory_tuple.name}
+    log_freq: 10
+  continual:
+    enabled: true
+    phi_checkpoint_dir: /data/zhaishaoqing/project/sam3-M2C/data/1e3a525b/workspace
+    phi_load_dir: workspace
+    sccm_lambda: 0.0
+launcher:
+  num_nodes: 1
+  gpus_per_node: 1
+  experiment_log_dir: /data/zhaishaoqing/project/sam3-M2C/data/1e3a525b/workspace
+  multiprocessing_context: forkserver
+submitit:
+  account: null
+  partition: null
+  qos: null
+  timeout_hour: 72
+  use_cluster: true
+  cpus_per_task: 10
+  port_range:
+  - 10000
+  - 65000
+  constraint: null
+  job_array:
+    num_tasks: 1
+    task_index: 0
+all_supercategories:
+- name: kvasir
+  val:
+    img_folder: test
+    json: test.json
+  train:
+    img_folder: train
+    json: train.json
+data_prompts:
+  kvasir: '[{"id": 1, "name": "kvasir", "supercategory": "target"}]'
